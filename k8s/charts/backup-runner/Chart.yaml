@@ -1,0 +1,6 @@
+apiVersion: v2
+name: backup-runner
+description: 정책 파일에서 백업 CronJob 을 만든다. 정책 파일이 곧 이 차트의 values 다.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

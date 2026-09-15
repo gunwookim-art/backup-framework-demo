@@ -1,0 +1,11 @@
+# 역할 → 사람 매핑.
+# 실제 환경에서는 LDAP 그룹이나 사내 조직도가 이 역할을 한다.
+#
+# 정책에 개인 이름을 적지 않는 이유가 여기 있다.
+# 사람이 바뀌어도 정책 항목은 그대로 남고, 역할이 비면 "미승계"로 드러난다.
+
+roles:
+  team-orders:   [alice, bob]
+  team-billing:  [carol]
+  platform-team: [dave]
+  team-retired:  []          # 담당자가 모두 떠났다 → 미승계

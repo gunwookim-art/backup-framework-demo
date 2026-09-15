@@ -1,0 +1,15 @@
+# 이 파일은 기본값일 뿐이다.
+# 실제 values 는 policies/<service>.yaml — 서비스 담당자가 쓰는 정책 파일이다.
+#
+#   helm template charts/backup-runner -f policies/orders.yaml
+#
+# 정책 파일과 Helm values 가 같은 파일이므로, 정책에서 실행으로 가는 사이에
+# 사람도 봇도 무언가를 다시 쓰지 않는다.
+
+global:
+  runnerImage: ghcr.io/example/backup-runner:0.1.0
+
+service: ""
+owner_role: ""
+tier: business
+items: []

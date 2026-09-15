@@ -1,0 +1,65 @@
+# 정책 파일 양식. 이 파일을 복사해서 <서비스명>.yaml 로 만든다.
+#
+# 담당자가 정하는 것:  무엇을 · 보호할 것인가 · 언제 · 며칠 · 어떻게 확인
+# 인프라팀이 주는 것:  어떤 어댑터를 고를 수 있는지, 어떤 저장소 이름이 있는지
+#
+# 일곱 가지를 다 적는 것은 judgement: backup 인 항목뿐이다.
+# 나머지 판정은 네 줄이면 끝난다.
+
+service: my-service
+owner_role: team-example       # 개인 이름 금지. roles.yaml 에 있는 역할명
+tier: business                 # business | team | shared | platform | host | external
+
+items:
+  # ── 백업할 것 ────────────────────────────────────────────
+  - name: database
+    kind: data                 # data | config | log
+    judgement: backup
+    reason: "왜 잃으면 안 되는지 한 줄"
+    source:
+      type: sqlite             # 어댑터가 다루는 원본 종류
+      locator: "file://demo-data/my-service.db"
+      # credentials: "secret://ns/name"    # 참조만. 값을 여기 적지 않는다
+    adapter: sqlite@1          # adapters/ 에 있는 것 중 하나
+    schedule: "0 3 * * *"
+    retention: {keep_days: 7, min_copies: 1}
+    target: "backend://local-primary/my-service/database"
+    objectives: {rpo: 24h, rto: 2h}
+    verify:
+      data:
+        - builtin: integrity-check
+        - sql: "select count(*) from my_table"
+    restore_test: {schedule: "0 5 * * 1"}
+
+  # ── 같은 실행에 묶을 것 ──────────────────────────────────
+  # 함께 복원해야 짝이 맞는 항목은 같은 backup_id 로 묶는다.
+  - name: config
+    kind: config
+    judgement: backup
+    reason: "서비스 재구성에 필요"
+    source: {type: dir, locator: "file://demo-data/my-service-config"}
+    adapter: file-copy@1
+    target: "backend://local-primary/my-service/config"
+    schedule: with:database    # database 와 같은 실행
+
+  # ── 다시 만들 수 있는 것 ─────────────────────────────────
+  - name: cache
+    kind: data
+    judgement: regenerate
+    reason: "조회 캐시. 재기동하면 다시 채워짐"
+    regenerate: {procedure: "재기동", duration: 5m}
+
+  # ── 보호가 필요 없는 것 ──────────────────────────────────
+  - name: tmp
+    kind: data
+    judgement: exclude
+    reason: "임시 파일. 프로세스 종료 시 삭제됨"
+
+  # ── 아직 판단하지 못한 것 ────────────────────────────────
+  # 기한을 반드시 적는다. 지나면 조회 화면에 나온다.
+  - name: access-log
+    kind: log
+    judgement: hold
+    reason: "감사 요구사항 확인 필요"
+    review_by: 2026-12-01
+    review_role: platform-team

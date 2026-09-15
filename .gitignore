@@ -1,0 +1,13 @@
+# 데모가 만드는 것 — 원본 데이터와 실행 결과
+demo-data/
+demo-state/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+.idea/
+.vscode/
+.DS_Store

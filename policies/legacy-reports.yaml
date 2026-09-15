@@ -1,0 +1,26 @@
+# 담당자가 모두 떠난 서비스.
+#
+# roles.yaml 의 team-retired 에 배정된 사람이 0명이다.
+# 판정은 hold 인 채로 재검토 기한도 지났다.
+#
+# 확인할 것:
+#   - 미승계로 나온다 (역할에 사람이 없음)
+#   - 재검토 초과로 나온다 (hold 인데 기한이 지남)
+#   이 두 가지가 문서가 아니라 조회 결과로 드러나는 것이 요점이다.
+
+service: legacy-reports
+owner_role: team-retired
+tier: business
+
+items:
+  - name: archive
+    kind: data
+    judgement: hold
+    reason: "보호 필요성을 판단할 담당자가 없음"
+    review_by: 2026-01-01          # 이미 지났다
+    review_role: platform-team
+
+  - name: scratch
+    kind: data
+    judgement: exclude
+    reason: "리포트 생성 중 임시 파일. 재실행으로 대체 가능"

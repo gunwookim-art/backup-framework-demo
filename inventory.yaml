@@ -1,0 +1,9 @@
+# 존재하는 서비스 목록.
+# 실제 환경에서는 `kubectl get ns` 나 자산 관리 시스템이 이 역할을 한다.
+# 여기 있는데 policies/ 에 파일이 없으면 "미등록 서비스"로 나온다.
+
+services:
+  - orders
+  - billing
+  - legacy-reports
+  - shipping          # 정책 파일이 없다 → 미등록 서비스

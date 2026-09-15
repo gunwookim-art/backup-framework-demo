@@ -1,0 +1,49 @@
+# 정상적으로 관리되고 있는 서비스.
+# 데이터와 설정이 하나의 backup_id 로 묶이고, 주간 복구 시험까지 등록되어 있다.
+
+service: orders
+owner_role: team-orders
+tier: business
+
+items:
+  - name: database
+    kind: data
+    judgement: backup
+    reason: "주문 원장. 유실 시 재생성 불가"
+    source:
+      type: sqlite
+      locator: "file://demo-data/orders.db"
+    adapter: sqlite@1
+    schedule: "0 3 * * *"
+    retention: {keep_days: 7, min_copies: 1}
+    target: "backend://local-primary/orders/database"
+    objectives: {rpo: 24h, rto: 2h}
+    verify:
+      data:
+        - builtin: integrity-check
+        - sql: "select count(*) from orders"
+    restore_test: {schedule: "0 5 * * 1"}
+
+  - name: config
+    kind: config
+    judgement: backup
+    reason: "서비스 재구성에 필요한 설정"
+    source:
+      type: dir
+      locator: "file://demo-data/orders-config"
+    adapter: file-copy@1
+    target: "backend://local-primary/orders/config"
+    schedule: with:database
+
+  - name: session-cache
+    kind: data
+    judgement: regenerate
+    reason: "세션 캐시. 재기동 시 자동 재생성"
+    regenerate: {procedure: "재기동", duration: 5m}
+
+  - name: access-log
+    kind: log
+    judgement: hold
+    reason: "감사 보존 기간이 정해지지 않음"
+    review_by: 2026-12-01
+    review_role: platform-team
