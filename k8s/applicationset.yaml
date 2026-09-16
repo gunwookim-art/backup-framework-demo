@@ -9,6 +9,9 @@
 #                          judgement: backup 항목마다 CronJob
 #
 # 정책 파일이 없으면 Application 도 없다 → 미등록 서비스가 배포 화면에서도 보인다.
+#
+# 전제: k8s/manifests/00-base.yaml 이 먼저 적용되어 있어야 한다.
+#       (네임스페이스 · ServiceAccount · PVC · storage ConfigMap)
 
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -18,23 +21,31 @@ metadata:
 spec:
   generators:
     - git:
-        repoURL: https://github.com/example/backup-framework-demo
+        repoURL: https://github.com/gunwookim-art/backup-framework-demo
         revision: main
         files:
+          # `_template.yaml` 은 예시라 제외한다. 그대로 두면 service 가 비어
+          # 이름 없는 Application 이 생긴다.
           - path: "policies/*.yaml"
+          - path: "policies/_template.yaml"
+            exclude: true
 
   template:
     metadata:
       name: "backup-{{ service }}"        # 정책 파일의 service 필드
     spec:
-      project: backup
+      project: default
       source:
-        repoURL: https://github.com/example/backup-framework-demo
+        repoURL: https://github.com/gunwookim-art/backup-framework-demo
         targetRevision: main
-        path: charts/backup-runner
+        # 차트는 저장소 안 k8s/charts/backup-runner 에 있다.
+        path: k8s/charts/backup-runner
         helm:
           valueFiles:
-            - "../../{{ path }}"          # 정책 파일이 곧 values
+            # 차트 기준 상대 경로. k8s/charts/backup-runner 에서 세 단계 올라가면
+            # 저장소 루트다. {{ path }} 는 정책 파일이 들어 있는 디렉터리(policies),
+            # {{ path.filename }} 은 파일 이름(orders.yaml).
+            - "../../../{{ path }}/{{ path.filename }}"
       destination:
         server: https://kubernetes.default.svc
         namespace: backup-system
@@ -42,3 +53,5 @@ spec:
         automated:
           prune: true                     # 정책 파일을 지우면 CronJob 도 사라진다
           selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

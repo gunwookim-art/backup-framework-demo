@@ -1,0 +1,86 @@
+# 차트가 전제하지만 저장소에 없던 것들 — 네임스페이스 · ServiceAccount · PVC · 저장소 설정.
+#
+# 적용:  kubectl apply -f k8s/manifests/00-base.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup-system
+  labels:
+    backup.example.io/purpose: runner
+---
+# 복구 시험을 격리해서 돌릴 자리. 운영 네임스페이스와 분리한다 —
+# 복구 시험이 실제 서비스 데이터에 닿을 수 있으면 시험이 아니라 사고다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backup-verify
+  labels:
+    backup.example.io/purpose: restore-test
+---
+# 차트의 cronjob.yaml 이 serviceAccountName 으로 참조한다.
+# 권한 바인딩은 일부러 없다 — runner 는 쿠버네티스 API 를 호출하지 않는다.
+# 나중에 어댑터가 Secret 을 직접 읽거나 Job 을 만들면 그때 Role 을 붙인다.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-runner
+  namespace: backup-system
+automountServiceAccountToken: false
+---
+# 산출물 저장소 + 백업 대상 원본.
+#
+# k3s 기본 StorageClass 는 local-path 다. ReadWriteOnce · 노드 로컬이므로
+# PV 에 노드 어피니티가 붙고, 이 PVC 를 쓰는 파드는 전부 같은 노드로 간다.
+# 데모에서는 그것으로 충분하다. 여러 노드에서 동시에 쓰려면 RWX 저장소가 필요하다.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-data
+  namespace: backup-system
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+# storage.yaml 을 이미지 안의 것 대신 이 값으로 덮어쓴다.
+#
+# root 를 절대경로로 준다. backends.LocalBackend 가 `ROOT / cfg["root"]` 로 붙이는데
+# pathlib 은 오른쪽이 절대경로면 그것을 그대로 쓰므로 코드 변경 없이 PVC 를 가리킨다.
+#
+# 산출물(primary)과 결과 기록(offsite)은 같은 PVC 안의 다른 디렉터리다.
+# 실제 환경이라면 fault_domain 이 다른 별개 저장소여야 한다 — 아래 주석 참고.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-storage-config
+  namespace: backup-system
+data:
+  storage.yaml: |
+    backends:
+      local-primary:
+        type: local
+        root: /store/primary
+        fault_domain: pvc-backup-data     # 실제로는 offsite 와 같은 디스크다
+        write_protection: none
+
+      local-offsite:
+        type: local
+        root: /store/offsite
+        # 이름은 offsite 지만 같은 PVC 안이다. 장애 도메인이 실제로 분리되지 않았다는
+        # 사실을 숨기지 않으려고 fault_domain 을 같은 값으로 적는다.
+        fault_domain: pvc-backup-data
+        write_protection: versioning
+
+      object-store:
+        type: s3
+        enabled: false
+        endpoint: https://s3.example.com
+        bucket: backups
+        prefix: v2/
+        fault_domain: region-b
+
+    results:
+      backend: local-offsite
+      prefix: results
