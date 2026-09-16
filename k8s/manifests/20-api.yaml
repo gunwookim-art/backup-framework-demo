@@ -38,7 +38,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: api
-          image: backup-runner:0.1.0
+          image: localhost/backup-runner:0.1.0
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "backupfw.api"]
           ports:

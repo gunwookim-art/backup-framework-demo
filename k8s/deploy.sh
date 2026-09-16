@@ -12,12 +12,14 @@
 #   - agent 노드로 이미지를 밀 때만 ssh 필요 (포트 6879)
 set -euo pipefail
 
-IMAGE=backup-runner:0.1.0
+IMAGE=localhost/backup-runner:0.1.0
 TAR=/tmp/backup-runner.tar
 NS=backup-system
 AGENTS="${AGENTS:-10.10.200.237 10.10.200.238}"
 SSH_PORT="${SSH_PORT:-6879}"
 STEP="${1:-all}"
+# sudo 의 secure_path 에 /usr/local/bin 이 없어 `sudo k3s` 가 command not found 로 끝난다.
+K3S="${K3S:-/usr/local/bin/k3s}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
@@ -45,14 +47,14 @@ do_image() {
     ls -lh "$TAR"
 
     say "server 노드에 import"
-    sudo k3s ctr images import "$TAR"
+    sudo "$K3S" ctr images import "$TAR"
 
     # PVC 가 local-path 라 파드는 한 노드에 묶이지만, 어느 노드가 될지는 첫 스케줄이
     # 정한다. 세 노드 모두에 넣어 두면 그 선택과 무관하게 돈다.
     for ip in $AGENTS; do
         say "agent $ip 에 import"
         if scp -P "$SSH_PORT" -o StrictHostKeyChecking=accept-new "$TAR" "$ip:/tmp/" >/dev/null; then
-            ssh -p "$SSH_PORT" "$ip" "sudo k3s ctr images import $TAR && rm -f $TAR"
+            ssh -p "$SSH_PORT" "$ip" "sudo $K3S ctr images import $TAR && rm -f $TAR"
         else
             echo "  !! $ip 전송 실패 — 그 노드에 스케줄되면 ImagePullBackOff 가 난다" >&2
         fi

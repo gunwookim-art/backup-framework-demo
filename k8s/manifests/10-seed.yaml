@@ -92,7 +92,7 @@ spec:
         fsGroup: 10001            # PVC 를 10001 이 쓸 수 있게
       containers:
         - name: seed
-          image: backup-runner:0.1.0
+          image: localhost/backup-runner:0.1.0
           imagePullPolicy: IfNotPresent      # 로컬 import 이미지 — 레지스트리를 보지 않는다
           command: ["python", "/seed/seed.py"]
           volumeMounts:
