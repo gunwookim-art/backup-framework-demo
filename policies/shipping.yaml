@@ -1,0 +1,12 @@
+# [임시] ApplicationSet 자동 생성 확인용. 검증 후 되돌린다.
+service: shipping
+owner_role: platform-team
+tier: business
+
+items:
+  - name: database
+    kind: data
+    judgement: hold
+    reason: "보호 범위를 확인 중"
+    review_by: 2026-12-31
+    review_role: platform-team
