@@ -44,6 +44,9 @@ bash k8s/deploy.sh
 Argo CD 로 가려면 4번 대신 `kubectl apply -f k8s/applicationset.yaml` 을 쓴다.
 기반 매니페스트(1~3)는 ApplicationSet 이 만들지 않으므로 먼저 적용해야 한다.
 
+`applicationset.yaml` 은 `main` 을 가리킨다. 다른 브랜치에서 시험하려면 `revision` 과
+`targetRevision` 을 그 브랜치로 바꿔서 적용한다.
+
 ## 확인
 
 ```bash
@@ -96,6 +99,39 @@ backends:
 
 ---
 
+# 클러스터에서 확인한 것
+
+k3s 3노드(server 1 + agent 2, Rocky 9.8)에서 실제로 돌렸다.
+
+| 확인 | 결과 |
+| --- | --- |
+| 판정이 `backup` 인 항목만 스케줄이 생긴다 | CronJob 3개. `legacy-reports` 는 0개, `orders/config` 는 `database` 에 묶여 별도 생성 없음 |
+| 정상 백업 | `orders` success — B1~B6 통과, 산출물 `/store/primary`, 결과 `/store/offsite` |
+| 어긋난 원본 | `billing` blocked — B1 에서 멈추고 `B6 실패·차단이므로 보존 정리를 하지 않는다` |
+| **보존 정리가 건너뛰어지는가** | 오래된 백업 3건을 심어 두고 차단을 유발 → **3건 그대로 남음** |
+| 복구 시험 | success — 격리 복원 후 기준값 2건·1건 일치, `latest-verified.json` 생성 |
+| 조회 | `/gaps` 5건 · `/services` 판정 분포 정상 |
+| ApplicationSet | 정책 3개 → Application 3개 자동 생성, 전부 Synced/Healthy |
+| 정책 추가 | `policies/shipping.yaml` 추가 → 20초 내 `backup-shipping` 생성 (hold 뿐이라 CronJob 은 안 생김) |
+| 정책 삭제 | 파일 제거 → Application 과 ConfigMap 이 함께 prune, `미등록 서비스` 공백 복귀 |
+
+보존 정리 확인이 이 중 제일 중요하다. README 가 말하는 "흔한 구현은 삭제를 먼저 하기
+때문에 백업이 실패하면 삭제만 완료된다"의 반대가 실제로 성립하는 것을 본 것이다.
+
+## 전제 — Argo CD 설치 상태
+
+ApplicationSet 을 쓰려면 `applicationsets.argoproj.io` CRD 가 있어야 한다.
+
+`kubectl apply -f install.yaml` 로 Argo CD 를 깔면 이 CRD 가 **조용히 빠지는 일이 있다.**
+CRD 가 커서 `kubectl` 이 붙이는 `last-applied-configuration` 어노테이션이 256KB 한도를
+넘기 때문이다. 이때 `argocd-applicationset-controller` 가 CrashLoopBackOff 로 남는다.
+
+```bash
+kubectl get crd | grep applicationsets   # 없으면 아래
+kubectl apply --server-side --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
 # 돌려보며 발견한 것
 
 ## 고친 것
@@ -123,6 +159,26 @@ backends:
 `service` 가 비어 있어 이름이 `backup-` 인 Application 이 생긴다. `exclude: true` 로 뺐다.
 
 ## 고치지 않고 남긴 것
+
+**차단된 실행을 쿠버네티스가 재시도한다.** 클러스터에서 처음 드러난 것이다.
+
+`cmd_backup` 은 `result.status != "success"` 면 `1` 을 돌려준다. `blocked` 도 여기
+해당하므로 Job 이 실패로 끝나고, `backoffLimit: 2` 에 따라 **3번 실행된다.** 그때마다
+결과 기록이 하나씩 쌓인다. `billing` 을 두 번 돌린 뒤 결과 파일이 6개가 됐고
+`/gaps` 에 `실패 지속 — 최근 5회 연속 실패` 가 올라왔다.
+
+실제로 일어난 일은 **정책과 원본이 어긋났다는 하나의 사실**이다. 재시도해도 결과가
+달라질 수 없고(경로가 틀린 것이다), 기록만 늘어나 현황을 부풀린다.
+
+어댑터 계약에는 이미 이 구분이 있다 — `exit 2` 는 사전 조건 미충족이라 재시도하지
+않는다. 실행기 수준에는 그 대응물이 없다. 고르는 방법은 두 가지다.
+
+1. `blocked` 일 때 `0` 을 돌려준다. 차단은 실행기가 **제대로 판단해서 멈춘 것**이고
+   결과도 기록됐으므로 프로세스 실패가 아니라고 보는 쪽
+2. CronJob 의 `backoffLimit` 을 `0` 으로 둔다. 다만 진짜 일시적 실패도 재시도되지 않는다
+
+1번이 계약에 더 맞아 보이지만 `blocked` 를 성공으로 셀지는 이 저장소의 판단이라
+건드리지 않았다.
 
 **`activeDeadlineSeconds` 가 rto 의 2배로 계산된다.**
 `mul (regexFind "[0-9]+" .rto | int) 7200` 이라 `rto: 2h` 가 4시간이 된다. 시간 단위를
