@@ -1,13 +1,26 @@
 # 이 파일은 기본값일 뿐이다.
 # 실제 values 는 policies/<service>.yaml — 서비스 담당자가 쓰는 정책 파일이다.
 #
-#   helm template charts/backup-runner -f policies/orders.yaml
+#   helm template backup-orders k8s/charts/backup-runner \
+#     -n backup-system -f policies/orders.yaml
 #
 # 정책 파일과 Helm values 가 같은 파일이므로, 정책에서 실행으로 가는 사이에
 # 사람도 봇도 무언가를 다시 쓰지 않는다.
+#
+# global 아래 값들은 차트 동작용이다. 정책 파일에는 없고, 여기서만 온다.
+# ConfigMap 으로 굽는 정책 본문에서는 omit 으로 빠진다.
 
 global:
-  runnerImage: ghcr.io/example/backup-runner:0.1.0
+  # k3s 에 `ctr images import` 로 넣은 로컬 이미지. 레지스트리를 보지 않는다.
+  #
+  # `localhost/` 접두어가 필요하다. 이것이 없으면 쿠버네티스가 이름을
+  # `docker.io/library/backup-runner:0.1.0` 으로 정규화해 Docker Hub 를 찾으러 가고
+  # ErrImagePull 로 끝난다. podman 이 import 하는 이름이 곧 이 이름이다.
+  runnerImage: localhost/backup-runner:0.1.0
+  imagePullPolicy: IfNotPresent
+  # k8s/manifests/00-base.yaml 이 만드는 것들
+  storageConfigMap: backup-storage-config
+  dataClaim: backup-data
 
 service: ""
 owner_role: ""

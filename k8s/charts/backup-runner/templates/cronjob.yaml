@@ -2,11 +2,14 @@
   정책의 items 를 훑어 judgement: backup 인 항목마다 CronJob 을 만든다.
   hold · exclude · regenerate 는 실행이 생기지 않는다 — 판정과 사유로만 남는다.
   schedule: with:<leader> 인 항목은 leader 의 실행에 묶이므로 따로 만들지 않는다.
+  (묶인 항목은 runner 가 B5 에서 같은 backup_id 로 함께 처리한다)
 
   모든 CronJob 은 같은 runner 이미지를 쓴다. 다른 것은 인자와 Secret 뿐이다.
 */}}
 {{- $svc := .Values.service -}}
 {{- $owner := .Values.owner_role -}}
+{{- $img := .Values.global.runnerImage -}}
+{{- $ns := .Release.Namespace -}}
 {{- range .Values.items }}
 {{- if and (eq .judgement "backup") (not (hasPrefix "with:" (toString .schedule))) }}
 ---
@@ -14,7 +17,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: backup-{{ $svc }}-{{ .name }}
-  namespace: backup-system
+  namespace: {{ $ns }}
   labels:
     # 이 라벨이 없는 CronJob 은 점검이 "미등록 실행" 으로 잡는다.
     backup.example.io/policy: {{ $svc }}.{{ .name }}
@@ -29,20 +32,29 @@ spec:
       backoffLimit: 2
       {{- with .objectives }}
       {{- if .rto }}
+      # rto 를 시간 단위로 읽어 그 2배를 실행 상한으로 둔다.
+      # 복구 목표보다 오래 도는 백업은 목표 자체가 성립하지 않으므로 끊는다.
       activeDeadlineSeconds: {{ mul (regexFind "[0-9]+" .rto | int) 7200 }}
       {{- end }}
       {{- end }}
       template:
+        metadata:
+          labels:
+            backup.example.io/policy: {{ $svc }}.{{ .name }}
         spec:
           restartPolicy: Never
           serviceAccountName: backup-runner
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001          # PVC 쓰기 권한을 비루트 uid 에 맞춘다
           containers:
             - name: runner
               # 모든 서비스가 같은 이미지를 쓴다. 어댑터는 이 이미지 안에 들어 있다.
-              image: "{{ $.Values.global.runnerImage | default "ghcr.io/example/backup-runner:0.1.0" }}"
-              args:
-                - "--service={{ $svc }}"
-                - "--item={{ .name }}"
+              image: {{ $img | quote }}
+              imagePullPolicy: {{ $.Values.global.imagePullPolicy | default "IfNotPresent" }}
+              # CLI 계약 그대로:  python -m backupfw backup <service> <item>
+              args: ["backup", {{ $svc | quote }}, {{ .name | quote }}]
               env:
                 - name: POLICY_VERSION
                   value: {{ $.Release.Revision | quote }}
@@ -53,9 +65,15 @@ spec:
                     name: {{ . | replace "secret://" "" | splitList "/" | last }}
               {{- end }}
               volumeMounts:
-                - name: policy
-                  mountPath: /policy
-                  readOnly: true
+                # 정책 파일. load_policy() 가 ROOT/policies/<service>.yaml 을 읽으므로
+                # 이미지 안의 policies/ 위에 이 서비스 것만 덮어 마운트한다.
+                - {name: policy, mountPath: /app/policies, readOnly: true}
+                # 저장소 설정. root 가 절대경로(/store/...)로 바뀐다.
+                - {name: storage, mountPath: /app/storage.yaml, subPath: storage.yaml, readOnly: true}
+                # 산출물 + 결과 기록
+                - {name: data, mountPath: /store, subPath: store}
+                # 백업 대상 원본. 정책의 locator 가 file://demo-data/... 라 ROOT 밑이어야 한다
+                - {name: data, mountPath: /app/demo-data, subPath: demo-data}
               resources:
                 requests: {cpu: 100m, memory: 128Mi}
                 limits: {cpu: "1", memory: 1Gi}
@@ -63,51 +81,88 @@ spec:
             - name: policy
               configMap:
                 name: backup-policy-{{ $svc }}
+            - name: storage
+              configMap:
+                name: {{ $.Values.global.storageConfigMap | default "backup-storage-config" }}
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ $.Values.global.dataClaim | default "backup-data" }}
 {{- end }}
 
 {{- if and (eq .judgement "backup") .restore_test }}
 ---
+# 복구 시험. 격리는 지금 컨테이너 안의 demo-state/restore 디렉터리로만 이루어진다.
+# backup-verify 네임스페이스로 옮기려면 저장소가 RWX 여야 한다 — 현재 PVC 는 RWO 라
+# 네임스페이스를 넘지 못한다. (결정 13 의 동시성 예산과 함께 미결)
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: restore-test-{{ $svc }}-{{ .name }}
-  namespace: backup-system
+  namespace: {{ $ns }}
   labels:
     backup.example.io/policy: {{ $svc }}.{{ .name }}
     backup.example.io/kind: restore-test
 spec:
   schedule: {{ .restore_test.schedule | quote }}
   concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      backoffLimit: 1
       template:
+        metadata:
+          labels:
+            backup.example.io/policy: {{ $svc }}.{{ .name }}
+            backup.example.io/kind: restore-test
         spec:
           restartPolicy: Never
           serviceAccountName: backup-runner
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
           containers:
             - name: runner
-              image: "{{ $.Values.global.runnerImage | default "ghcr.io/example/backup-runner:0.1.0" }}"
-              args:
-                - "restore-test"
-                - "--service={{ $svc }}"
-                - "--item={{ .name }}"
+              image: {{ $img | quote }}
+              imagePullPolicy: {{ $.Values.global.imagePullPolicy | default "IfNotPresent" }}
+              args: ["restore-test", {{ $svc | quote }}, {{ .name | quote }}]
               volumeMounts:
-                - name: policy
-                  mountPath: /policy
-                  readOnly: true
+                - {name: policy, mountPath: /app/policies, readOnly: true}
+                - {name: storage, mountPath: /app/storage.yaml, subPath: storage.yaml, readOnly: true}
+                - {name: data, mountPath: /store, subPath: store}
+                - {name: data, mountPath: /app/demo-data, subPath: demo-data}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "1", memory: 1Gi}
           volumes:
             - name: policy
               configMap:
                 name: backup-policy-{{ $svc }}
+            - name: storage
+              configMap:
+                name: {{ $.Values.global.storageConfigMap | default "backup-storage-config" }}
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ $.Values.global.dataClaim | default "backup-data" }}
 {{- end }}
 {{- end }}
 ---
 # 정책 파일 자체를 실행 시점에 읽을 수 있도록 ConfigMap 으로 함께 배포한다.
+#
+# 키 이름이 <service>.yaml 인 이유: policy.load_policy() 가
+# ROOT/policies/<service>.yaml 을 찾는다. /app/policies 에 이 ConfigMap 을 마운트하면
+# 그 경로가 그대로 맞는다 — 정책을 읽는 코드는 컨테이너인지 아닌지 몰라도 된다.
+#
+# global 은 차트 동작용 값이라 정책 본문에서 뺀다. 남기면 정책 파일이 아닌 것이
+# 정책으로 기록된다.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: backup-policy-{{ $svc }}
-  namespace: backup-system
+  namespace: {{ $ns }}
+  labels:
+    backup.example.io/policy-file: {{ $svc }}
 data:
-  policy.yaml: |
-{{ toYaml .Values | indent 4 }}
+  {{ $svc }}.yaml: |
+{{ toYaml (omit .Values "global") | indent 4 }}

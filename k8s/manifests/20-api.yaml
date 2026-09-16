@@ -1,0 +1,61 @@
+# 조회 API — /services · /gaps · /runs/{id}
+#
+# ⚠️ Service 를 두지 않았다. backupfw/api.py 의 serve() 가
+#    ThreadingHTTPServer(("127.0.0.1", port)) 로 루프백에만 바인딩하기 때문이다.
+#    Service 를 만들어도 kube-proxy 가 파드 IP:8080 으로 보내는데 그 주소로는 듣지
+#    않는다. 코드를 고치지 않고 확인하려면 port-forward 를 쓴다(파드의 네트워크
+#    네임스페이스로 직접 들어가므로 루프백 바인딩도 닿는다):
+#
+#      kubectl -n backup-system port-forward deploy/backup-api 8080:8080
+#      http://localhost:8080/gaps
+#
+#    클러스터 안에서 서비스로 노출하려면 bind 주소를 0.0.0.0 으로 열 수 있어야 한다.
+#    이 저장소의 설계 판단이 필요한 지점이라 여기서 고치지 않았다.
+#
+# 적용:  kubectl apply -f k8s/manifests/20-api.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-api
+  namespace: backup-system
+  labels:
+    app.kubernetes.io/name: backup-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backup-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backup-api
+    spec:
+      serviceAccountName: backup-runner
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: api
+          image: localhost/backup-runner:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "backupfw.api"]
+          ports:
+            - {name: http, containerPort: 8080}
+          volumeMounts:
+            # 정책은 이미지에 구운 policies/ 를 그대로 쓴다.
+            # CronJob 과 달리 여기서는 **전체** 정책이 필요하다 — /gaps 가
+            # "있어야 할 것"과 "실제 있었던 것"을 맞대는데, 정책 하나만 보이면
+            # 나머지 서비스의 공백이 없는 것처럼 보인다.
+            - {name: storage, mountPath: /app/storage.yaml, subPath: storage.yaml, readOnly: true}
+            - {name: data, mountPath: /store, subPath: store}
+            - {name: data, mountPath: /app/demo-data, subPath: demo-data}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: storage
+          configMap: {name: backup-storage-config}
+        - name: data
+          persistentVolumeClaim: {claimName: backup-data}

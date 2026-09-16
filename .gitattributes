@@ -1,0 +1,7 @@
+# 리눅스에서 실행되는 파일은 줄바꿈을 LF 로 고정한다.
+# CRLF 로 체크아웃되면 셸이 `\r` 을 명령 일부로 읽어 "bad interpreter" 로 죽는다.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.py        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
